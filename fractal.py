@@ -1,33 +1,50 @@
+"""Uses the cpp fractal generator"""
 import os
+import faulthandler
 
 import bpy
 
-from .fractalgen import FractalGen
-from .lsystem.lsystem_parse import parse as lparse
+from .fractal_cpp.build.fractalgen import generate_fractal
+from .util.timer import Timer
+
 
 
 def _create_fractal(self, _context):
-    parsed_lsystem = None
+    faulthandler.enable()
     if self.grammar_path == "":
         return
-    try:
-        with open(self.grammar_path) as grammar_file:
-            parsed_lsystem = lparse(grammar_file.read())
-    except FileNotFoundError:
-        self.grammar_path = self.standard_path
-        return
-    except RuntimeError as run_err:
-        msg = ""
-        for err_line in run_err.args:
-            msg += err_line + "\n"
-        self.report({'ERROR_INVALID_INPUT'}, msg)
-        self.grammar_path = self.standard_path
-        return
 
-    bpy.context.window_manager.progress_begin(0, 99)
-    FractalGen(self.iteration, parsed_lsystem, bpy.context.window_manager.progress_update,
-               bpy.context.scene.cursor_location).draw_vertices()
-    bpy.context.window_manager.progress_end()
+    with Timer(name="all", verbose=True):
+        with Timer(name="Generation", verbose=True):
+            verts, edges, faces = generate_fractal(self.grammar_path, self.iteration)
+            if edges is None:
+                edges = []
+            if faces is None:
+                faces = []
+
+
+        profile_mesh = bpy.data.meshes.new("FractalMesh")
+
+        with Timer(name="Copying", verbose=True):
+            profile_mesh.from_pydata(verts, edges, faces)
+            #profile_mesh.vertices.foreach_get("co", verts)
+            #profile_mesh.edges.foreach_get("vertices", edges)
+
+        profile_mesh.update()
+        profile_object = bpy.data.objects.new("Fractal", profile_mesh)
+        profile_object.data = profile_mesh
+
+        scene = bpy.context.scene
+        scene.objects.link(profile_object)
+
+        with Timer(name="Optimizing", verbose=True):
+            scene.objects.active = profile_object
+
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.remove_doubles(threshold=0.0001)
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+    # bpy.context.window_manager.progress_end()
 
 
 class Fractal_add_object(bpy.types.Operator):
@@ -38,17 +55,18 @@ class Fractal_add_object(bpy.types.Operator):
 
     iteration = bpy.props.IntProperty(
         name="Iteration Count",
-        default=2,
+        default=1,
         min=1,
         soft_min=1,
-        soft_max=7,
+        soft_max=10,
         subtype='UNSIGNED',
         description="Number of iterations of the fractal")
 
     standard_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                                 "examples", "standard", "sierpinski.txt")
+                                 "examples", "3d", "menge.txt")
 
-    def reset_iteration(self, context):
+    def reset_iteration(self, _context):
+        """Resets iteration"""
         self.iteration = 2
 
     grammar_path = bpy.props.StringProperty(
@@ -60,7 +78,7 @@ class Fractal_add_object(bpy.types.Operator):
     )
 
     def execute(self, context):
-
+        """Create the fractal"""
         _create_fractal(self, context)
 
         return {'FINISHED'}
